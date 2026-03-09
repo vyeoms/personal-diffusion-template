@@ -1,0 +1,58 @@
+# Base Configuration for Personal Diffusion Template
+
+# Model Architecture
+backbone:
+  architecture: "simple_mlp"
+  init_kwargs:
+    in_dim: 2
+    hidden_dim: 128
+    num_layers: 3
+    time_emb_dim: 64
+
+# Diffusion Process
+diffusion:
+  type: "ddpm"
+  init_kwargs:
+    num_steps: 1000
+    schedule: "cosine"
+    beta_end: 0.002
+  loss_kwargs:
+    gamma: 5.0  # min-SNR-γ clipping value (Hang et al. 2023)
+
+# Sampler
+sampler:
+  type: "ddpm"
+  sampler_kwargs:
+    num_steps: 1000
+
+# Training
+training:
+  random_seed: 50192834
+  iters: 512
+  warmup_steps: 5000
+  gradient_accumulation_steps: 1
+  max_grad_norm: 1.0
+  batch_size: 256
+  lr: 8e-3
+  optimizer: "adam"
+  ema_decay: 0.9
+  optimizer_kwargs:
+    weight_decay: 0
+
+# Validation
+validation:
+  n_samples: 256
+
+# Data
+data:
+  dataset: "custom"
+  image_size: 64
+  center_crop: true
+  num_workers: 4
+
+# Logging
+logging:
+  log_freq: 100  # steps
+  save_freq: 100  # steps
+  checkpoint_dir: "./checkpoints"
+  log_dir: "./logs"

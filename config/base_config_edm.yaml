@@ -1,0 +1,65 @@
+# Base Configuration for Personal Diffusion Template
+
+# Model Architecture
+backbone:
+  architecture: "mp_simple_mlp"
+  init_kwargs:
+    in_dim: 2
+    hidden_dim: 128
+    num_layers: 3
+
+# Diffusion Process
+diffusion:
+  type: "edm"
+  init_kwargs:
+    sigma_data: 0.5
+    label_dim: 0
+    use_fp16: True
+  loss_kwargs:
+    P_mean: -2.3
+    P_std: 1.1
+
+# Sampler
+sampler:
+  type: "edm"  # edm
+  sampler_kwargs:
+    num_steps: 100
+    rho: 7.0
+    sigma_min: 2e-2
+    sigma_max: 10.0
+
+# Training
+training:
+  random_seed: 50192834
+  iters: 512
+  warmup_steps: 5000
+  gradient_accumulation_steps: 1
+  max_grad_norm: 1.0
+  batch_size: 256
+  lr: 5e-2
+  optimizer: "adam"
+  ema_decay: 0.99
+  optimizer_kwargs:
+    weight_decay: 0.0
+    betas: [0.9, 0.999]
+
+# Validation
+validation:
+  n_samples: 64
+
+# Data
+data:
+  dataset: "custom"
+  image_size: 64
+  center_crop: true
+  num_workers: 4
+
+# Logging
+logging:
+  log_freq: 100  # steps
+  save_freq: 100  # steps
+  checkpoint_dir: "./checkpoints"
+  log_dir: "./logs"
+  wandb:
+    track: True
+    project: "diffusion_template_viz"
