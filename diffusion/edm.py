@@ -66,7 +66,7 @@ class EDM2Loss:
         self.P_std = P_std
         self.sigma_data = sigma_data
 
-    def __call__(self, net, target, labels=None):
+    def __call__(self, net, target, labels=None, visualize=False):
         rnd_normal = torch.randn([target.shape[0]], device=target.device)
         sigma = (rnd_normal * self.P_std + self.P_mean).exp()
         weight = (sigma ** 2 + self.sigma_data ** 2) / (sigma * self.sigma_data) ** 2
@@ -79,6 +79,8 @@ class EDM2Loss:
         denoised, logvar = net(target + noise, sigma, labels, return_logvar=True)
         logvar = append_dims(logvar.flatten(), target.ndim) # ensure logvar is broadcastable to target's shape
         loss = (weight / logvar.exp()) * ((denoised - target) ** 2) + logvar
+        if visualize:
+            return loss, sigma.flatten()
         return loss
 
 def evaluate_log_likelihood(

@@ -65,7 +65,7 @@ def bucket_and_average(x, y, num_buckets=10, method='equal_width'):
     return np.array(bucket_centers), np.array(avg_y_values), np.array(std_y_values), bucket_edges
 
 # Example usage and plotting
-def plot_bucketed_data(x, y, loss_mean, loss_std, log_fn, num_buckets=10, method='equal_width', iteration=None):
+def plot_bucketed_data(x, y, loss_mean, loss_std, log_fn, num_buckets=10, method='equal_width', step=None):
     """
     Create and plot bucketed data.
     """
@@ -86,7 +86,7 @@ def plot_bucketed_data(x, y, loss_mean, loss_std, log_fn, num_buckets=10, method
     ax2.set_title(f'Bucketed Data ({num_buckets} buckets, {method})')
     ax2.grid(True, alpha=0.3)
 
-    x = np.logspace(-2, 1.5, 1000)
+    x = np.logspace(x.min().log10(), x.max().log10(), 1000)
     p = lognorm.pdf(x = x, scale = np.exp(loss_mean), s = loss_std)
     ax2.plot(x, p, c="orange", linewidth=2, label="Noise distribution")
 
@@ -94,15 +94,15 @@ def plot_bucketed_data(x, y, loss_mean, loss_std, log_fn, num_buckets=10, method
     plt.tight_layout()
     fig = ax2.get_figure()
     if log_fn is not None:
-        if iteration is None:
-            raise ValueError("iteration must be provided when logging")
-        log_fn({ f'Buckets' : wandb.Image(fig) }, step=iteration)
+        if step is None:
+            raise ValueError("step must be provided when logging")
+        log_fn({ f'Buckets' : wandb.Image(fig) }, step=step)
     plt.clf()
     # plt.show()
     
     return bucket_centers, avg_y_values, bucket_edges
 
-def spaghetti_plot_paths(paths, sigma_schedule, measured, log_fn=None, iteration=None):
+def spaghetti_plot_paths(paths, sigma_schedule, measured, log_fn=None, step=None):
     # Convert to numpy for plotting
     paths_np = paths.cpu().numpy()
 
@@ -127,7 +127,7 @@ def spaghetti_plot_paths(paths, sigma_schedule, measured, log_fn=None, iteration
     plt.gca().invert_xaxis()
     fig = plt.gca().get_figure()
     if log_fn is not None:
-        if iteration is None:
-            raise ValueError("iteration must be provided when logging")
-        log_fn({ f'{measured} over sampling' : wandb.Image(fig) }, step=iteration)
+        if step is None:
+            raise ValueError("step must be provided when logging")
+        log_fn({ f'{measured} over sampling' : wandb.Image(fig) }, step=step)
     plt.close(fig)

@@ -1,3 +1,4 @@
+from collections import deque
 from copy import deepcopy
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from torch.utils.data import DataLoader
 import wandb
 
 from dataset.custom_data import CustomImageDataset
+from utils.debug_viz_utils import plot_bucketed_data
 from utils.misc_utils import noop
 
 class EMA:
@@ -139,31 +141,52 @@ def train(cfg: DictConfig):
 
     batch_size = cfg.training.batch_size
     
+    # For EDM loss visualization and tracking
+    if cfg.diffusion.type == "edm" and cfg.logging.wandb.track:
+        not_agg_list = deque(maxlen=cfg.logging.edm_loss_viz_start)
+        sigmas_list = deque(maxlen=cfg.logging.edm_loss_viz_start)
+        P_mean = cfg.diffusion.loss_kwargs.P_mean
+        P_std = cfg.diffusion.loss_kwargs.P_std
+    
     # Training loop
     for step in range(cfg.training.iters):
         train_batch = next(train_dl).to(device) * normalization_factor
         optimizer.zero_grad()
-        loss = loss_fn(model, train_batch).mean()
+        if cfg.diffusion.type == "edm" and cfg.logging.wandb.track:
+            loss, sigma = loss_fn(model, train_batch, visualize=True)
+            not_agg_list.append(loss)
+            sigmas_list.append(sigma)
+        else:
+            loss = loss_fn(model, train_batch)
+        loss = loss.mean()
         loss.backward()
         optimizer.step()
         
         ema.update()
 
         # Logging
-        if step % cfg.logging.log_freq == 0:
+        if step % cfg.logging.train_log_freq == 0:
             wandb.log({"training_loss": loss.item()}, step=step)
 
-            # Validation
+        # Validation
+        if step % cfg.logging.val_log_freq == 0:
+            # This visualization is heavier so we only do it every val_log_freq steps.
+            if step >= cfg.logging.edm_loss_viz_start:
+                y = torch.cat([a.squeeze().detach().cpu() for a in not_agg_list])
+                x = torch.cat([a.squeeze().detach().cpu() for a in sigmas_list])
+                plot_bucketed_data(x, y, P_mean, P_std, log_fn, 
+                                   num_buckets=100, method='equal_count', step=step)
+
             val_batch = next(val_dl).to(device) * normalization_factor
             validate(ema.get_model(), 
-                     val_batch, 
-                     step, 
-                     n_samples=cfg.validation.n_samples, 
-                     sampler=sampler, 
-                     loss_fn=loss_fn, 
-                     log_fn=log_fn, 
-                     normalization_factor=normalization_factor, 
-                     **cfg.sampler.sampler_kwargs)
+                        val_batch, 
+                        step, 
+                        n_samples=cfg.validation.n_samples, 
+                        sampler=sampler, 
+                        loss_fn=loss_fn, 
+                        log_fn=log_fn, 
+                        normalization_factor=normalization_factor, 
+                        **cfg.sampler.sampler_kwargs)
         
         # Checkpoint
         if step % cfg.logging.save_freq == 0:

@@ -56,10 +56,12 @@ data:
 
 # Logging
 logging:
-  log_freq: 100  # steps
+  train_log_freq: 20  # steps
+  val_log_freq: 100  # steps
   save_freq: 100  # steps
   checkpoint_dir: "./checkpoints"
   log_dir: "./logs"
+  edm_loss_viz_start: 50  # iteration to start visualizing EDM loss vs sigma
   wandb:
     track: True
     project: "diffusion_template_viz"
