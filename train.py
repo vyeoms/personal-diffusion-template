@@ -41,15 +41,17 @@ def parse_config_init(cfg, device=torch.device("cuda" if torch.cuda.is_available
     
     # Diffusion type
     if cfg.diffusion.type == "ddpm":
-        from diffusion.ddpm import DDPM, DDPMLoss
+        from diffusion.ddpm import DDPM, DDPMLoss, evaluate_log_likelihood
         model = DDPM(backbone, 
                      **cfg.diffusion.init_kwargs).to(device)
         loss_fn = DDPMLoss(**cfg.diffusion.loss_kwargs)
+        ll_fn = evaluate_log_likelihood
     elif cfg.diffusion.type == "edm":
-        from diffusion.edm import Precond, EDM2Loss
+        from diffusion.edm import Precond, EDM2Loss, evaluate_log_likelihood
         model = Precond(backbone, 
                         **cfg.diffusion.init_kwargs).to(device)
         loss_fn = EDM2Loss(**cfg.diffusion.loss_kwargs)
+        ll_fn = evaluate_log_likelihood
     else:
         raise ValueError(f"Unsupported diffusion type: {cfg.diffusion.type}")
     
@@ -71,13 +73,13 @@ def parse_config_init(cfg, device=torch.device("cuda" if torch.cuda.is_available
                                      **OmegaConf.to_container(cfg.training.optimizer_kwargs, resolve=True))
     else:
         raise ValueError(f"Unsupported optimizer type: {cfg.training.optimizer}")
-    return backbone, model, sampler, loss_fn, optimizer
+    return backbone, model, sampler, loss_fn, ll_fn, optimizer
 
 @hydra.main(version_base=None, config_path="./config", config_name="base_config_edm")
 def train(cfg: DictConfig):
 
     if cfg.logging.wandb.track:
-        wandb.init(project=cfg.logging.wandb.project, name="test_run_from_checkpoint")
+        wandb.init(project=cfg.logging.wandb.project, name="test_run")
         log_fn = wandb.log
     else:
         log_fn = noop
@@ -107,7 +109,7 @@ def train(cfg: DictConfig):
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     batch_size = cfg.training.batch_size
 
-    backbone, model, sampler, loss_fn, optimizer = parse_config_init(cfg, device=device)
+    backbone, model, sampler, loss_fn, ll_fn, optimizer = parse_config_init(cfg, device=device)
     
     # Initialize EMA
     ema = EMA(model, decay=cfg.training.ema_decay)
@@ -151,29 +153,33 @@ def train(cfg: DictConfig):
         # Validation
         if step % cfg.logging.val_log_freq == 0:
             # This visualization is heavier so we only do it every val_log_freq steps.
-            if step >= cfg.logging.edm_loss_viz_start:
+            if cfg.diffusion.type == "edm" and step >= cfg.logging.edm_loss_viz_start:
                 y = torch.cat([a.squeeze().detach().cpu() for a in not_agg_list])
                 x = torch.cat([a.squeeze().detach().cpu() for a in sigmas_list])
                 plot_bucketed_data(x, y, P_mean, P_std, log_fn, 
                                    num_buckets=100, method='equal_count', step=step)
 
             val_batch = next(val_dl).to(device) * normalization_factor
+            cpu_state, gpu_state = torch.random.get_rng_state(), torch.cuda.get_rng_state()
             validate(ema.get_model(), 
                         val_batch, 
                         step, 
                         n_samples=cfg.validation.n_samples, 
                         sampler=sampler, 
                         loss_fn=loss_fn, 
+                        ll_fn=ll_fn, 
                         log_fn=log_fn, 
                         normalization_factor=normalization_factor, 
                         **cfg.sampler.sampler_kwargs)
+            torch.random.set_rng_state(cpu_state)
+            torch.cuda.set_rng_state(gpu_state)
         
         # Checkpoint
         if step % cfg.logging.save_freq == 0:
             save(model, optimizer, ema, checkpoint_dir / f'model-{step}.pt', step=step)
 
 def validate(model, val_batch, step, n_samples, sampler=None, loss_fn=None, 
-             log_fn=None, normalization_factor=1.0, **sampler_kwargs):
+             ll_fn=None, log_fn=None, normalization_factor=1.0, **sampler_kwargs):
     """Validation using EMA model."""
 
     # Just evaluation
@@ -181,8 +187,8 @@ def validate(model, val_batch, step, n_samples, sampler=None, loss_fn=None,
     with torch.no_grad():
         noise = torch.randn([n_samples, 2]).to(val_batch.device)  # Sample noise for generation
         loss = loss_fn(model, val_batch).mean()  # Diffusion loss
-        samples = sampler(model, noise, **sampler_kwargs)  # Sample from the model
-        samples = samples / normalization_factor  # Scale back to original variance
+        norm_samples = sampler(model, noise, **sampler_kwargs)  # Sample from the model
+        samples = norm_samples / normalization_factor  # Scale back to original variance
         log_fn({'val_loss': loss.item()}, step=step)
         ax = sns.scatterplot(x=samples.cpu().numpy()[:, 0], y=samples.cpu().numpy()[:, 1])
         plt.xticks(ticks=[], labels=[])
@@ -190,6 +196,8 @@ def validate(model, val_batch, step, n_samples, sampler=None, loss_fn=None,
         fig = ax.get_figure()
         log_fn({ f'Generated samples' : wandb.Image(fig) }, step=step)
         plt.close(fig)
+        nll = -ll_fn(model, norm_samples)
+        log_fn({'nll': nll.mean().item()}, step=step)
     
     print(f"Validation loss at step {step}: {loss.item():.4f}")
 

@@ -90,7 +90,6 @@ def evaluate_log_likelihood(
         tmin: float = 0.002,
         rho: float = 7,
         num_steps: int = 100,
-        num_pixels = 1,
         **net_fwd_kwargs
     ):
     """
@@ -124,11 +123,15 @@ def evaluate_log_likelihood(
         
         # Forward diffusion process (ODE from data to noise)
         for i in range(1, ts.shape[0]):
-            t_prev = torch.ones(current_samples.shape[0], 1, 1, 1).to(current_samples.device) * ts[i-1]
-            t = torch.ones(current_samples.shape[0], 1, 1, 1).to(current_samples.device) * ts[i]
+            t_prev = torch.ones(current_samples.shape[0]).to(current_samples.device) * ts[i-1]
+            t = torch.ones(current_samples.shape[0]).to(current_samples.device) * ts[i]
+            dt = t - t_prev
+
+            t_prev = append_dims(t_prev, current_samples.ndim)
+            t = append_dims(t, current_samples.ndim)
             
             # Get score estimate from the model
-            x_hat,_ = model(current_samples, t_prev, **net_fwd_kwargs)
+            x_hat = model(current_samples, t_prev, **net_fwd_kwargs)
             f = -(x_hat - current_samples)/t_prev
             
             # Estimate trace of Jacobian using Hutchinson's estimator
@@ -138,17 +141,16 @@ def evaluate_log_likelihood(
             trace_est = (vjp * epsilon).sum(dim=tuple(range(1, len(current_samples.shape))))
             
             # Update log likelihood (negative trace because we're going forward)
-            dt = t - t_prev
-            log_likelihood = log_likelihood + ( trace_est * dt / (num_pixels*torch.log(torch.tensor(2))) )
+            log_likelihood = log_likelihood + ( trace_est * dt / (d*torch.log(torch.tensor(2))) )
             
             # Forward ODE step (deterministic, no noise)
             with torch.no_grad():
-                current_samples = current_samples + f * dt
+                current_samples = current_samples + f * append_dims(dt, f.ndim)
                 
             current_samples = current_samples.detach().requires_grad_(True)
-                    
+
         # Add log probability of the final noise distribution (Gaussian with variance tmax^2)
         log_likelihood = log_likelihood - ( 0.5 * d * np.log(2 * np.pi * tmax**2) + \
-                        torch.sum(current_samples**2, dim=tuple(range(1, len(current_samples.shape)))) / (2 * tmax**2) )/(num_pixels*torch.log(torch.tensor(2)))
+                        torch.sum(current_samples**2, dim=tuple(range(1, len(current_samples.shape)))) / (2 * tmax**2) )/(d*torch.log(torch.tensor(2)))
                 
         return log_likelihood

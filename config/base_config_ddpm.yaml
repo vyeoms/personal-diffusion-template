@@ -36,6 +36,8 @@ training:
   lr: 8e-3
   optimizer: "adam"
   ema_decay: 0.9
+  continue_from_checkpoint: False
+  checkpoint_path: "/change/to/your/checkpoint.pt"  # path to .pt file if continue_from_checkpoint is True
   optimizer_kwargs:
     weight_decay: 0
 
@@ -52,7 +54,11 @@ data:
 
 # Logging
 logging:
-  log_freq: 100  # steps
+  train_log_freq: 20  # steps
+  val_log_freq: 100  # steps
   save_freq: 100  # steps
   checkpoint_dir: "./checkpoints"
   log_dir: "./logs"
+  wandb:
+    track: True
+    project: "diffusion_template_viz"

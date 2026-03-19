@@ -4,7 +4,7 @@
 #     backbone(x_t, t) -> predicted_x0
 # where x_t is (B, C, H, W) and t is (B,) float timesteps in [0, T-1].
 
-
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -107,3 +107,138 @@ class DDPMLoss:
         weight = append_dims(snr.clamp(max=self.gamma) / self.gamma, x_0.ndim)
 
         return (weight * (x0_hat - x_0) ** 2).mean()
+
+def evaluate_log_likelihood(
+        model: torch.nn.Module,
+        samples: torch.Tensor,
+        **net_fwd_kwargs
+    ):
+    """
+    Implements the ODE from DDIM Eq (14): d(x_bar) = epsilon * d(sigma).
+    Evaluates log-likelihood by integrating from Data (t=0) -> Noise (t=T).
+    
+    x_bar = x / sqrt(alpha)
+    sigma = sqrt(1-alpha) / sqrt(alpha)
+    """
+    device = samples.device
+    batch_size = samples.shape[0]
+    data_dim = np.prod(samples.shape[1:])
+    
+    # 1. Prepare Schedule: alpha_bar
+    # alpha_bar usually goes from ~1.0 (data) to ~0.0 (noise)
+    alphas = model.alpha_bar.to(device)
+    
+    # Determine integration steps (Forward: Data -> Noise)
+    # We iterate 0 -> T-1
+    timesteps = range(0, alphas.shape[0] - 1)
+
+    nll_over_steps = []
+    x0_std_steps = []
+    eps_std_steps = []
+    x0_mean_steps = []
+    eps_mean_steps = []
+    dt_steps = []
+
+    # 2. Initialize x_bar (Equation 13/14 context)
+    # At t=0, alpha=1.0 (approx), so sigma=0. 
+    # Therefore x_bar_0 = x_data / 1.0 = x_data
+    with torch.enable_grad():
+        x_bar = samples.clone().detach().requires_grad_(True)
+        
+        # Accumulator for Log Likelihood (in Bits Per Dimension)
+        # We initialize to 0 and add the divergence terms + final prior term
+        ll_accumulator_bpd = torch.zeros(batch_size, device=device)
+        sigma_over_steps = []
+        sigma_next_steps = []
+        
+        for i in timesteps:
+            # Get current and next sigma
+            # We assume alphas[i] corresponds to step i
+            alpha_t = alphas[i]
+            alpha_next = alphas[i+1]
+            
+            sigma_t = torch.sqrt(1 - alpha_t) / torch.sqrt(alpha_t)
+            sigma_next = torch.sqrt(1 - alpha_next) / torch.sqrt(alpha_next)
+            sigma_over_steps.append(sigma_t.cpu())
+            sigma_next_steps.append(sigma_next.cpu())
+            
+            # d_sigma (Positive because we are encoding: sigma increases)
+            dt = sigma_next - sigma_t
+            dt_steps.append(dt.cpu())
+            
+            # Prepare Model Input
+            # From Image Eq (14): input is x_bar / sqrt(sigma^2 + 1)
+            # This mathematically simplifies to x_original (the pixel space)
+            scale_factor = torch.sqrt(sigma_t**2 + 1)
+            model_input = x_bar / scale_factor
+            
+            t_tensor = torch.full((batch_size,), i, device=device, dtype=torch.long)
+            
+            # Forward Pass
+            # We assume the model outputs 'x_0_pred'. 
+            # If your model outputs 'epsilon' directly, remove the conversion block.
+            model_output = model(model_input, t_tensor, **net_fwd_kwargs)
+            
+            # --- CONVERSION BLOCK (Adjust based on model type) ---
+            # We need epsilon for the ODE drift.
+            # If model predicts x_0: eps = (x_t - sqrt(alpha)*x_0) / sqrt(1-alpha)
+            # Note: model_input is x_t (pixel space)
+            
+            # Using the standard formula for epsilon derived from x_0 prediction:
+            eps = (model_input - torch.sqrt(alpha_t) * model_output) / torch.sqrt(1 - alpha_t)
+            
+            # If your model predicts epsilon directly:
+            # eps = model_output
+            # -----------------------------------------------------
+
+            # Drift term for the ODE: f(x_bar, sigma) = epsilon
+            drift = eps
+            
+            # --- Divergence Estimation (Hutchinson) ---
+            noise = torch.randn_like(x_bar)
+            
+            # Compute vjp = noise^T * J
+            # We need grad of drift w.r.t x_bar (the loop variable)
+            vjp = torch.autograd.grad(drift, x_bar, noise, create_graph=False)[0]
+            
+            # Trace estimation: sum(vjp * noise)
+            div_est = (vjp * noise).sum(dim=tuple(range(1, len(x_bar.shape))))
+            
+            # Update Likelihood
+            # CNF Formula: log p_0 = log p_T + Integral(div) d_sigma
+            # We add the divergence term immediately, scaled by dimensions
+            ll_accumulator_bpd += (div_est * dt) / (data_dim * np.log(2))
+            nll_over_steps.append(ll_accumulator_bpd.detach().cpu().mean())
+            
+            # --- Euler Step ---
+            # dx_bar = epsilon * d_sigma
+            with torch.no_grad():
+                x_bar = x_bar + drift * dt
+
+            x0_std_steps.append(model_output.detach().cpu().std())
+            eps_std_steps.append(eps.detach().cpu().std())
+            x0_mean_steps.append(model_output.detach().cpu().mean())
+            eps_mean_steps.append(eps.detach().cpu().mean())
+            
+            # Re-attach gradient for next step
+            x_bar = x_bar.detach().requires_grad_(True)
+            
+        # 3. Final Prior Evaluation (at T)
+        # At the end of encoding, x_bar_T should be Gaussian.
+        # But what variance?
+        # x_T ~ N(0, I). 
+        # x_bar_T = x_T / sqrt(alpha_T).
+        # Var(x_bar_T) = 1/alpha_T = sigma_T^2 + 1.
+        final_var = ( sigma_next**2 + 1 ).cpu()
+        
+        # Log Prob of Gaussian with covariance 'final_var * I'
+        # -d/2 * log(2*pi*var) - sum(x^2)/(2*var)
+        log_prob_prior = (
+            -0.5 * data_dim * np.log(2 * np.pi * final_var) 
+            - 0.5 * (x_bar**2).sum(dim=tuple(range(1, len(x_bar.shape)))) / final_var
+        )
+        
+        # Add prior term (converted to bits per dim)
+        ll_accumulator_bpd += log_prob_prior / (data_dim * np.log(2))
+        
+    return ll_accumulator_bpd
