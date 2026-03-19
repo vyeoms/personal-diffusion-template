@@ -13,7 +13,8 @@ import wandb
 
 from dataset.custom_data import CustomImageDataset
 from utils.debug_viz_utils import plot_bucketed_data
-from utils.misc_utils import noop, EMA, cycle
+from utils.misc_utils import noop
+from utils.train_utils import cycle, EMA, load, save
 
 def parse_config_init(cfg, device=torch.device("cuda" if torch.cuda.is_available() else "cpu")):
     # Backbone
@@ -67,7 +68,7 @@ def parse_config_init(cfg, device=torch.device("cuda" if torch.cuda.is_available
     if cfg.training.optimizer == "adam":
         optimizer = torch.optim.Adam(model.parameters(), 
                                      lr=cfg.training.lr, 
-                                     **cfg.training.optimizer_kwargs)
+                                     **OmegaConf.to_container(cfg.training.optimizer_kwargs, resolve=True))
     else:
         raise ValueError(f"Unsupported optimizer type: {cfg.training.optimizer}")
     return backbone, model, sampler, loss_fn, optimizer
@@ -76,12 +77,14 @@ def parse_config_init(cfg, device=torch.device("cuda" if torch.cuda.is_available
 def train(cfg: DictConfig):
 
     if cfg.logging.wandb.track:
-        wandb.init(project=cfg.logging.wandb.project, name="test_run")
+        wandb.init(project=cfg.logging.wandb.project, name="test_run_from_checkpoint")
         log_fn = wandb.log
     else:
         log_fn = noop
 
-    torch.random.manual_seed(cfg.training.random_seed)
+    print(OmegaConf.to_yaml(cfg))
+
+    ############################### Data block ###############################
     
     # Preprocess to variance 0.5, which is the expected standard deviation of the training data.
     # CHANGE WITH YOUR DATA STANDARD DEVIATION
@@ -93,21 +96,29 @@ def train(cfg: DictConfig):
 
     train_dl = cycle( DataLoader(train_data, batch_size=cfg.training.batch_size, shuffle=True) )
     val_dl = cycle( DataLoader(val_data, batch_size=cfg.training.batch_size, shuffle=False) )
-
-    print(OmegaConf.to_yaml(cfg))
+    ############################### Data block ###############################
     
+    ############################### Setup block ############################### 
+    # Probably could use some refactoring a-la Karras for iteration, but it works ¯\_(ツ)_/¯
+    step = 0
+    torch.random.manual_seed(cfg.training.random_seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    # Setup block. Probably could use some refactoring a-la Karras for iteration, but it works ¯\_(ツ)_/¯
+    checkpoint_dir = Path(cfg.logging.checkpoint_dir)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    batch_size = cfg.training.batch_size
+
     backbone, model, sampler, loss_fn, optimizer = parse_config_init(cfg, device=device)
     
     # Initialize EMA
     ema = EMA(model, decay=cfg.training.ema_decay)
-    
-    checkpoint_dir = Path(cfg.logging.checkpoint_dir)
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    batch_size = cfg.training.batch_size
+    # Using a checkpoint?
+    if cfg.training.continue_from_checkpoint:
+        assert Path(cfg.training.checkpoint_path).exists(), "Specified checkpoint file does not exist."
+        step = load(cfg.training.checkpoint_path, model, optimizer, ema, device)
+        print(f"Resuming training from step {step}...")
+    else:
+        print("Starting training from scratch...")
     
     # For EDM loss visualization and tracking
     if cfg.diffusion.type == "edm" and cfg.logging.wandb.track:
@@ -115,9 +126,10 @@ def train(cfg: DictConfig):
         sigmas_list = deque(maxlen=cfg.logging.edm_loss_viz_start)
         P_mean = cfg.diffusion.loss_kwargs.P_mean
         P_std = cfg.diffusion.loss_kwargs.P_std
+    ############################### Setup block ############################### 
     
     # Training loop
-    for step in range(cfg.training.iters):
+    for step in range(step, cfg.training.iters):
         train_batch = next(train_dl).to(device) * normalization_factor
         optimizer.zero_grad()
         if cfg.diffusion.type == "edm" and cfg.logging.wandb.track:
@@ -158,18 +170,18 @@ def train(cfg: DictConfig):
         
         # Checkpoint
         if step % cfg.logging.save_freq == 0:
-            torch.save(model.state_dict(), checkpoint_dir / f"step_{step}.pt")
+            save(model, optimizer, ema, checkpoint_dir / f'model-{step}.pt', step=step)
 
 def validate(model, val_batch, step, n_samples, sampler=None, loss_fn=None, 
              log_fn=None, normalization_factor=1.0, **sampler_kwargs):
     """Validation using EMA model."""
 
     # Just evaluation
-    ema_model = model.eval()
+    model.eval()
     with torch.no_grad():
         noise = torch.randn([n_samples, 2]).to(val_batch.device)  # Sample noise for generation
-        loss = loss_fn(ema_model, val_batch).mean()  # Diffusion loss
-        samples = sampler(ema_model, noise, **sampler_kwargs)  # Sample from the model
+        loss = loss_fn(model, val_batch).mean()  # Diffusion loss
+        samples = sampler(model, noise, **sampler_kwargs)  # Sample from the model
         samples = samples / normalization_factor  # Scale back to original variance
         log_fn({'val_loss': loss.item()}, step=step)
         ax = sns.scatterplot(x=samples.cpu().numpy()[:, 0], y=samples.cpu().numpy()[:, 1])
