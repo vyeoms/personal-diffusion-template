@@ -78,8 +78,10 @@ def parse_config_init(cfg, device=torch.device("cuda" if torch.cuda.is_available
 @hydra.main(version_base=None, config_path="./config", config_name="base_config_edm")
 def train(cfg: DictConfig):
 
+    name = f"{cfg.diffusion.type}_{cfg.backbone.architecture}_lr{cfg.training.lr}_bs{cfg.training.batch_size}"
+
     if cfg.logging.wandb.track:
-        wandb.init(project=cfg.logging.wandb.project, name="test_run")
+        wandb.init(project=cfg.logging.wandb.project, name=name)
         log_fn = wandb.log
     else:
         log_fn = noop
