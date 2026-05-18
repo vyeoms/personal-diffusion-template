@@ -39,7 +39,7 @@ class ResBlock(nn.Module):
         return x + F.silu(h)               # residual connection
 
 
-class SimpleMLP(nn.Module):
+class ResMLP(nn.Module):
     """
     Lightweight MLP backbone for x0-prediction DDPM on low-dimensional data.
 

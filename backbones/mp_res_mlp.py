@@ -22,7 +22,7 @@ class MPResBlock(nn.Module):
         return mp_sum(x, mp_silu(h))                   # residual
 
 
-class MPSimpleMLP(nn.Module):
+class MPResMLP(nn.Module):
     """
     Magnitude-preserving MLP backbone for x0-prediction DDPM (Karras et al. EDM2).
 
