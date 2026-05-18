@@ -13,14 +13,16 @@ class Flow(torch.nn.Module):
         self.label_dim = label_dim
         self.backbone = backbone_net
 
-    def forward(self, x, sigma, class_labels=None, **backbone_kwargs):
+    def forward(self, x, t, class_labels=None, **backbone_kwargs):
         x = x.to(torch.float32)
-        sigma = sigma.to(torch.float32).flatten()
+        t = t.to(torch.float32).flatten()
         class_labels = None if self.label_dim == 0 else torch.zeros([1, self.label_dim], device=x.device) if class_labels is None else class_labels.to(torch.float32).reshape(-1, self.label_dim)
 
-        return self.backbone(x, sigma, class_labels, **backbone_kwargs)
+        c_noise = t.logit()/4
 
-class FMLoss:
+        return self.backbone(x, c_noise, class_labels, **backbone_kwargs)
+
+class LogitFMLoss:
     def __init__(self, P_mean=0.0, P_std=1.0):
         self.P_mean = P_mean
         self.P_std = P_std
@@ -31,12 +33,27 @@ class FMLoss:
 
         # Reshape sigma and weight to be broadcastable to target's shape
         t = append_dims(t, target.ndim)
-        c_noise = t.flatten().logit()
 
         noise = torch.randn_like(target)
         z_t = t*target + (1-t)*noise
         vel_target = target - noise
-        flow_velocity = (net(z_t, c_noise, labels) - z_t) / (1 - t).clamp(min=min_weight) # Clipping as "Back to Basics"
+        flow_velocity = (net(z_t, t, labels) - z_t) / (1 - t)
+        loss = (flow_velocity - vel_target).pow(2)
+        if visualize:
+            return loss, t.flatten()
+        return loss
+
+class VanillaFMLoss:
+    def __call__(self, net, target, labels=None, visualize=False, min_weight=0.05):
+        t = torch.rand([target.shape[0]], device=target.device)
+
+        # Reshape sigma and weight to be broadcastable to target's shape
+        t = append_dims(t, target.ndim)
+
+        noise = torch.randn_like(target)
+        z_t = t*target + (1-t)*noise
+        vel_target = target - noise
+        flow_velocity = (net(z_t, t, labels) - z_t) / (1 - t).clamp(min=min_weight) # Clipping as "Back to Basics"
         loss = (flow_velocity - vel_target).pow(2)
         if visualize:
             return loss, t.flatten()
