@@ -13,14 +13,14 @@ class Flow(torch.nn.Module):
         self.label_dim = label_dim
         self.backbone = backbone_net
 
-    def forward(self, x, t, class_labels=None, **backbone_kwargs):
+    def forward(self, x, t, labels=None, **backbone_kwargs):
         x = x.to(torch.float32)
         t = t.to(torch.float32).flatten()
-        class_labels = None if self.label_dim == 0 else torch.zeros([1, self.label_dim], device=x.device) if class_labels is None else class_labels.to(torch.float32).reshape(-1, self.label_dim)
+        labels = None if self.label_dim == 0 else torch.zeros([1, self.label_dim], device=x.device) if labels is None else labels.to(torch.float32).reshape(-1, self.label_dim)
 
         c_noise = t.logit()/4
 
-        return self.backbone(x, c_noise, class_labels, **backbone_kwargs)
+        return self.backbone(x, c_noise, labels, **backbone_kwargs)
 
 class LogitFMLoss:
     def __init__(self, P_mean=0.0, P_std=1.0):

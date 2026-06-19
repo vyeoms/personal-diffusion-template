@@ -13,14 +13,14 @@ class Flow(torch.nn.Module):
         self.label_dim = label_dim
         self.backbone = backbone_net
 
-    def forward(self, x, t, class_labels=None, **backbone_kwargs):
+    def forward(self, x, t, labels=None, **backbone_kwargs):
         x = x.to(torch.float32)
         t = t.to(torch.float32).flatten()
-        class_labels = None if self.label_dim == 0 else torch.zeros([1, self.label_dim], device=x.device) if class_labels is None else class_labels.to(torch.float32).reshape(-1, self.label_dim)
+        labels = None if self.label_dim == 0 else torch.zeros([1, self.label_dim], device=x.device) if labels is None else labels.to(torch.float32).reshape(-1, self.label_dim)
 
         c_noise = t.logit()/4
 
-        return self.backbone(x, c_noise, class_labels, **backbone_kwargs)
+        return self.backbone(x, c_noise, labels, **backbone_kwargs)
 
 def vanilla_fm_loss(model, target: torch.Tensor, labels=None) -> torch.Tensor:
     B = target.shape[0]
@@ -33,7 +33,7 @@ def vanilla_fm_loss(model, target: torch.Tensor, labels=None) -> torch.Tensor:
     x_t = (1 - t) * x0 + t * target
     u_t = target - x0
 
-    v_t = model(x_t, t)
+    v_t = model(x_t, t, labels)
     return torch.nn.functional.mse_loss(v_t, u_t)
 
 def logit_fm_loss(model, target: torch.Tensor, labels=None,
@@ -49,5 +49,5 @@ def logit_fm_loss(model, target: torch.Tensor, labels=None,
     x_t = (1 - t) * x0 + t * target
     u_t = target - x0
 
-    v_t = model(x_t, t)
+    v_t = model(x_t, t, labels)
     return torch.nn.functional.mse_loss(v_t, u_t)

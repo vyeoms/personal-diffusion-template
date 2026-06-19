@@ -1,9 +1,8 @@
 from collections import deque
-from copy import deepcopy
+from importlib import import_module
 from pathlib import Path
 
 import hydra
-import numpy as np
 from omegaconf import DictConfig, OmegaConf
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -16,63 +15,71 @@ from utils.debug_viz_utils import plot_bucketed_data
 from utils.misc_utils import noop
 from utils.train_utils import cycle, EMA, load, save
 
+# ---------------------------------------------------------------------------
+# Registries — add a single line to support a new component.
+# Each entry is (module_path, class_or_function_name).
+# For diffusion: (module, model_cls, loss_cls, ll_fn_name_or_None).
+# ---------------------------------------------------------------------------
+BACKBONE_REGISTRY = {
+    "unet":       ("backbones.karras_unet", "UNet"),
+    "mlp":        ("backbones.mlp", "MLP"),
+    "res_mlp":    ("backbones.res_mlp", "ResMLP"),
+    "mp_res_mlp": ("backbones.mp_res_mlp", "MPResMLP"),
+    "mp_mlp":     ("backbones.mp_mlp", "MPMLP"),
+    "dit":        ("backbones.dit", "DiT"),
+}
+
+DIFFUSION_REGISTRY = {
+    "ddpm": ("diffusion.ddpm",      "DDPM",    "DDPMLoss",    "evaluate_log_likelihood"),
+    "edm":  ("diffusion.edm",       "Precond", "EDM2Loss",    "evaluate_log_likelihood"),
+    "flow": ("diffusion.b2b_flow",  "Flow",    "LogitFMLoss", None),
+}
+
+SAMPLER_REGISTRY = {
+    "ddpm": ("samplers.ddpm_sampler", "ddpm_sampler"),
+    "ddim": ("samplers.ddim_sampler", "ddim_sampler"),
+    "edm":  ("samplers.edm_sampler",  "edm_sampler"),
+    "flow": ("samplers.flow_sampler", "flow_sampler"),
+}
+
+OPTIMIZER_REGISTRY = {
+    "adam": torch.optim.Adam,
+}
+
+def _import(module_path, attr_name):
+    return getattr(import_module(module_path), attr_name)
+
 def parse_config_init(cfg, device=torch.device("cuda" if torch.cuda.is_available() else "cpu")):
     # Backbone
-    if cfg.backbone.architecture == "unet":
-        from backbones.karras_unet import UNet
-        backbone = UNet(**cfg.backbone.init_kwargs).to(device)
-    elif cfg.backbone.architecture == "mlp":
-        from backbones.mlp import MLP
-        backbone = MLP(**cfg.backbone.init_kwargs).to(device)
-    elif cfg.backbone.architecture == "simple_mlp":
-        from backbones.simple_mlp import SimpleMLP
-        backbone = SimpleMLP(**cfg.backbone.init_kwargs).to(device)
-    elif cfg.backbone.architecture == "mp_simple_mlp":
-        from backbones.mp_simple_mlp import MPSimpleMLP
-        backbone = MPSimpleMLP(**cfg.backbone.init_kwargs).to(device)
-    elif cfg.backbone.architecture == "mp_mlp":
-        from backbones.mp_mlp import MPMLP
-        backbone = MPMLP(**cfg.backbone.init_kwargs).to(device)
-    elif cfg.backbone.architecture == "dit":
-        from backbones.dit import DiT
-        backbone = DiT(**cfg.backbone.init_kwargs).to(device)
-    else:
-        raise ValueError(f"Unsupported architecture: {cfg.backbone.architecture}")
-    
-    # Diffusion type
-    if cfg.diffusion.type == "ddpm":
-        from diffusion.ddpm import DDPM, DDPMLoss, evaluate_log_likelihood
-        model = DDPM(backbone, 
-                     **cfg.diffusion.init_kwargs).to(device)
-        loss_fn = DDPMLoss(**cfg.diffusion.loss_kwargs)
-        ll_fn = evaluate_log_likelihood
-    elif cfg.diffusion.type == "edm":
-        from diffusion.edm import Precond, EDM2Loss, evaluate_log_likelihood
-        model = Precond(backbone, 
-                        **cfg.diffusion.init_kwargs).to(device)
-        loss_fn = EDM2Loss(**cfg.diffusion.loss_kwargs)
-        ll_fn = evaluate_log_likelihood
-    else:
-        raise ValueError(f"Unsupported diffusion type: {cfg.diffusion.type}")
-    
-    if cfg.sampler.type == "ddpm":
-        from samplers.ddpm_sampler import ddpm_sampler
-        sampler = ddpm_sampler
-    elif cfg.sampler.type == "ddim":
-        from samplers.ddim_sampler import ddim_sampler
-        sampler = ddim_sampler
-    elif cfg.sampler.type == "edm":
-        from samplers.edm_sampler import edm_sampler
-        sampler = edm_sampler
-    else:
-        raise ValueError(f"Unsupported sampler type: {cfg.sampler.type}")
-    
-    if cfg.training.optimizer == "adam":
-        optimizer = torch.optim.Adam(model.parameters(), 
-                                     lr=cfg.training.lr, 
-                                     **OmegaConf.to_container(cfg.training.optimizer_kwargs, resolve=True))
-    else:
-        raise ValueError(f"Unsupported optimizer type: {cfg.training.optimizer}")
+    arch = cfg.backbone.architecture
+    if arch not in BACKBONE_REGISTRY:
+        raise ValueError(f"Unknown backbone: {arch}. Available: {list(BACKBONE_REGISTRY)}")
+    backbone = _import(*BACKBONE_REGISTRY[arch])(**cfg.backbone.init_kwargs).to(device)
+
+    # Diffusion
+    diff_type = cfg.diffusion.type
+    if diff_type not in DIFFUSION_REGISTRY:
+        raise ValueError(f"Unknown diffusion type: {diff_type}. Available: {list(DIFFUSION_REGISTRY)}")
+    diff_mod, model_cls, loss_cls, ll_name = DIFFUSION_REGISTRY[diff_type]
+    model = _import(diff_mod, model_cls)(backbone, **cfg.diffusion.init_kwargs).to(device)
+    loss_fn = _import(diff_mod, loss_cls)(**cfg.diffusion.loss_kwargs)
+    ll_fn = _import(diff_mod, ll_name) if ll_name else None
+
+    # Sampler
+    samp_type = cfg.sampler.type
+    if samp_type not in SAMPLER_REGISTRY:
+        raise ValueError(f"Unknown sampler: {samp_type}. Available: {list(SAMPLER_REGISTRY)}")
+    sampler = _import(*SAMPLER_REGISTRY[samp_type])
+
+    # Optimizer
+    opt_type = cfg.training.optimizer
+    if opt_type not in OPTIMIZER_REGISTRY:
+        raise ValueError(f"Unknown optimizer: {opt_type}. Available: {list(OPTIMIZER_REGISTRY)}")
+    optimizer = OPTIMIZER_REGISTRY[opt_type](
+        model.parameters(), lr=cfg.training.lr,
+        **OmegaConf.to_container(cfg.training.optimizer_kwargs, resolve=True),
+    )
+
     return backbone, model, sampler, loss_fn, ll_fn, optimizer
 
 @hydra.main(version_base=None, config_path="./config", config_name="base_config_edm")
@@ -109,10 +116,9 @@ def train(cfg: DictConfig):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     checkpoint_dir = Path(cfg.logging.checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    batch_size = cfg.training.batch_size
 
-    backbone, model, sampler, loss_fn, ll_fn, optimizer = parse_config_init(cfg, device=device)
-    
+    _, model, sampler, loss_fn, ll_fn, optimizer = parse_config_init(cfg, device=device)
+
     # Initialize EMA
     ema = EMA(model, decay=cfg.training.ema_decay)
 
@@ -187,7 +193,7 @@ def validate(model, val_batch, step, n_samples, sampler=None, loss_fn=None,
     # Just evaluation
     model.eval()
     with torch.no_grad():
-        noise = torch.randn([n_samples, 2]).to(val_batch.device)  # Sample noise for generation
+        noise = torch.randn([n_samples] + list(val_batch.shape[1:])).to(val_batch.device)
         loss = loss_fn(model, val_batch).mean()  # Diffusion loss
         norm_samples = sampler(model, noise, **sampler_kwargs)  # Sample from the model
         samples = norm_samples / normalization_factor  # Scale back to original variance
@@ -198,8 +204,9 @@ def validate(model, val_batch, step, n_samples, sampler=None, loss_fn=None,
         fig = ax.get_figure()
         log_fn({ f'Generated samples' : wandb.Image(fig) }, step=step)
         plt.close(fig)
-        nll = -ll_fn(model, norm_samples)
-        log_fn({'nll': nll.mean().item()}, step=step)
+        if ll_fn is not None:
+            nll = -ll_fn(model, norm_samples)
+            log_fn({'nll': nll.mean().item()}, step=step)
     
     print(f"Validation loss at step {step}: {loss.item():.4f}")
 

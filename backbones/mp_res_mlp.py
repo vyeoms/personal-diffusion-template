@@ -26,7 +26,7 @@ class MPResMLP(nn.Module):
     """
     Magnitude-preserving MLP backbone for x0-prediction DDPM (Karras et al. EDM2).
 
-    A direct MP counterpart of SimpleMLP — same architecture, same interface,
+    A direct MP counterpart of ResMLP — same architecture, same interface,
     with every non-MP primitive swapped out:
 
       SinusoidalTimeEmbedding  →  MPFourier   (unit-norm cosine features, Eq. 75)

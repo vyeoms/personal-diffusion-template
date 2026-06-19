@@ -1,4 +1,4 @@
-# Base Configuration for Personal Diffusion Template
+# Base Configuration for Flow Matching
 
 # Model Architecture
 backbone:
@@ -10,23 +10,18 @@ backbone:
 
 # Diffusion Process
 diffusion:
-  type: "edm"
+  type: "flow"
   init_kwargs:
-    sigma_data: 0.5
     label_dim: 0
-    use_fp16: True
   loss_kwargs:
-    P_mean: -2.3
-    P_std: 1.1
+    P_mean: 0.0
+    P_std: 1.0
 
 # Sampler
 sampler:
-  type: "edm"  # edm
+  type: "flow"
   sampler_kwargs:
     num_steps: 100
-    rho: 7.0
-    sigma_min: 2e-2
-    sigma_max: 10.0
 
 # Training
 training:
@@ -40,7 +35,7 @@ training:
   optimizer: "adam"
   ema_decay: 0.999
   continue_from_checkpoint: False
-  checkpoint_path: "/change/to/your/checkpoint.pt"  # path to .pt file if continue_from_checkpoint is True
+  checkpoint_path: "/change/to/your/checkpoint.pt"
   optimizer_kwargs:
     weight_decay: 0.0
     betas: [0.9, 0.999]
@@ -58,12 +53,11 @@ data:
 
 # Logging
 logging:
-  train_log_freq: 20  # steps
-  val_log_freq: 100  # steps
-  save_freq: 100  # steps
+  train_log_freq: 20
+  val_log_freq: 100
+  save_freq: 100
   checkpoint_dir: "./checkpoints"
   log_dir: "./logs"
-  edm_loss_viz_start: 50  # iteration to start visualizing EDM loss vs sigma
   wandb:
     track: True
     project: "diffusion_template_viz"

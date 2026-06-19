@@ -2,7 +2,7 @@
 
 # Model Architecture
 backbone:
-  architecture: "simple_mlp"
+  architecture: "res_mlp"
   init_kwargs:
     in_dim: 2
     hidden_dim: 128
@@ -15,15 +15,14 @@ diffusion:
   init_kwargs:
     num_steps: 1000
     schedule: "cosine"
-    beta_end: 0.002
+    cosine_clip: 0.999
   loss_kwargs:
     gamma: 5.0  # min-SNR-γ clipping value (Hang et al. 2023)
 
 # Sampler
 sampler:
   type: "ddpm"
-  sampler_kwargs:
-    num_steps: 1000
+  sampler_kwargs: {}
 
 # Training
 training:
@@ -35,7 +34,7 @@ training:
   batch_size: 256
   lr: 8e-3
   optimizer: "adam"
-  ema_decay: 0.9
+  ema_decay: 0.999
   continue_from_checkpoint: False
   checkpoint_path: "/change/to/your/checkpoint.pt"  # path to .pt file if continue_from_checkpoint is True
   optimizer_kwargs:

@@ -32,10 +32,10 @@ class Precond(torch.nn.Module):
         self.logvar_linear = MPConv(logvar_channels, 1, kernel=[])
         self.backbone = backbone_net
 
-    def forward(self, x, sigma, class_labels=None, force_fp32=False, return_logvar=False, **backbone_kwargs):
+    def forward(self, x, sigma, labels=None, force_fp32=False, return_logvar=False, **backbone_kwargs):
         x = x.to(torch.float32)
         sigma = sigma.to(torch.float32).flatten()
-        class_labels = None if self.label_dim == 0 else torch.zeros([1, self.label_dim], device=x.device) if class_labels is None else class_labels.to(torch.float32).reshape(-1, self.label_dim)
+        labels = None if self.label_dim == 0 else torch.zeros([1, self.label_dim], device=x.device) if labels is None else labels.to(torch.float32).reshape(-1, self.label_dim)
         dtype = torch.float16 if (self.use_fp16 and not force_fp32 and x.device.type == 'cuda') else torch.float32
 
         # Preconditioning weights.
@@ -51,7 +51,7 @@ class Precond(torch.nn.Module):
 
         # Run the model.
         x_in = (c_in * x).to(dtype)
-        F_x = self.backbone(x_in, c_noise, class_labels, **backbone_kwargs)
+        F_x = self.backbone(x_in, c_noise, labels, **backbone_kwargs)
         D_x = c_skip * x + c_out * F_x.to(torch.float32)
 
         # Estimate uncertainty if requested.

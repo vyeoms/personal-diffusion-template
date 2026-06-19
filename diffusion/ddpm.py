@@ -20,6 +20,7 @@ class DDPM(torch.nn.Module):
         beta_start: float = 1e-5,
         beta_end: float = 1e-1,
         cosine_s: float = 8e-3,         # offset for cosine schedule
+        cosine_clip: float = 0.999,     # max beta clamp for cosine schedule
     ):
         super().__init__()
         self.backbone = backbone
@@ -33,7 +34,7 @@ class DDPM(torch.nn.Module):
             steps = torch.arange(num_steps + 1, dtype=torch.float64)
             f = torch.cos((steps / num_steps + cosine_s) / (1 + cosine_s) * torch.pi / 2) ** 2
             alpha_bar = f / f[0]
-            betas = (1 - alpha_bar[1:] / alpha_bar[:-1]).clamp(max=beta_end)
+            betas = (1 - alpha_bar[1:] / alpha_bar[:-1]).clamp(max=cosine_clip)
 
         elif schedule == "sqrt":
             # Linear in sqrt(beta) — sometimes called "quadratic"
@@ -97,16 +98,16 @@ class DDPMLoss:
     def __init__(self, gamma: float = 5.0):
         self.gamma = gamma
 
-    def __call__(self, diffusion_model, x_0: torch.Tensor) -> torch.Tensor:
+    def __call__(self, diffusion_model, x_0: torch.Tensor, labels=None) -> torch.Tensor:
         t = torch.randint(0, diffusion_model.T, (x_0.shape[0],), device=x_0.device)
         x_t, _ = diffusion_model.q_sample(x_0, t)
-        x0_hat = diffusion_model(x_t, t.float())
+        x0_hat = diffusion_model(x_t, t.float(), labels)
 
         # SNR(t) = ᾱ_t / (1 − ᾱ_t)
         snr = diffusion_model.alpha_bar[t] / (1.0 - diffusion_model.alpha_bar[t])
         weight = append_dims(snr.clamp(max=self.gamma) / self.gamma, x_0.ndim)
 
-        return (weight * (x0_hat - x_0) ** 2).mean()
+        return weight * (x0_hat - x_0) ** 2
 
 def evaluate_log_likelihood(
         model: torch.nn.Module,
@@ -194,8 +195,8 @@ def evaluate_log_likelihood(
             # Drift term for the ODE: f(x_bar, sigma) = epsilon
             drift = eps
             
-            # --- Divergence Estimation (Hutchinson) ---
-            noise = torch.randn_like(x_bar)
+            # --- Divergence Estimation (Hutchinson, Rademacher noise) ---
+            noise = torch.randint(0, 2, x_bar.shape, device=x_bar.device).float() * 2 - 1
             
             # Compute vjp = noise^T * J
             # We need grad of drift w.r.t x_bar (the loop variable)

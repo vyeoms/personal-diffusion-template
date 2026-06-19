@@ -1,21 +1,12 @@
-# DDPM sampler implementation (x0-prediction). Created with Claude Opus 4.6
-
 import torch
 
-# ------------------------------------------------------------------
-# DDPM ancestral sampling: x_{t-1} ~ p(x_{t-1} | x_t)
-# ------------------------------------------------------------------
 @torch.no_grad()
-def ddpm_sampler(
-    ddpm_model: torch.nn.Module, 
-    noise: torch.Tensor = None, # Optional initial noise. If None, will sample fresh noise.
-    num_steps: int = 1000,
-    device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    ) -> torch.Tensor:
+def ddpm_sampler(ddpm_model, noise, labels=None, **kwargs):
     x = noise
-    for i in reversed(range(num_steps)):
+    device = x.device
+    for i in reversed(range(ddpm_model.T)):
         t = torch.full((x.shape[0],), i, device=device, dtype=torch.long)
-        x0_hat = ddpm_model(x, t)
+        x0_hat = ddpm_model(x, t, labels)
         eps_hat = ddpm_model._predict_eps(x, t, x0_hat)
 
         mean = ddpm_model.sqrt_recip_alphas[i] * (

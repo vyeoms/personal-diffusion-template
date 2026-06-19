@@ -153,11 +153,11 @@ class UNet(torch.nn.Module):
                 self.dec[f'{res}x{res}_block{idx}'] = Block(cin, cout, cemb, flavor='dec', attention=(res in attn_resolutions), **block_kwargs)
         self.out_conv = MPConv(cout, img_channels, kernel=[3,3])
 
-    def forward(self, x, noise_labels, class_labels):
+    def forward(self, x, noise_labels, labels):
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(noise_labels))
         if self.emb_label is not None:
-            emb = mp_sum(emb, self.emb_label(class_labels * np.sqrt(class_labels.shape[1])), t=self.label_balance)
+            emb = mp_sum(emb, self.emb_label(labels * np.sqrt(labels.shape[1])), t=self.label_balance)
         emb = mp_silu(emb)
 
         # Encoder.

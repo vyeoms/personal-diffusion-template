@@ -9,10 +9,14 @@ class ConditionalLinear(torch.nn.Module):
         self.lin = torch.nn.Linear(num_in, num_out)
         self.embed = MPFourier(num_channels, bandwidth)
         if embnetworklayers == 1:
-            self.embnetwork = torch.nn.Linear(num_channels,num_out)
+            self.embnetwork = torch.nn.Linear(num_channels, num_out)
         else:
-            self.embnetwork = torch.nn.Sequential(*[(torch.nn.Linear(num_channels, num_channels), torch.nn.Softplus()) for _ in range(embnetworklayers-1)] + 
-                                           torch.nn.Linear(num_channels,num_out))
+            layers = []
+            for _ in range(embnetworklayers - 1):
+                layers.append(torch.nn.Linear(num_channels, num_channels))
+                layers.append(torch.nn.Softplus())
+            layers.append(torch.nn.Linear(num_channels, num_out))
+            self.embnetwork = torch.nn.Sequential(*layers)
 
     def forward(self, x, sigma):
         out = self.lin(x)
