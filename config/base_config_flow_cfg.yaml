@@ -46,7 +46,7 @@ guidance:
 training:
   random_seed: 50192834
   iters: 4000
-  warmup_steps: 5000
+  warmup_steps: 200
   gradient_accumulation_steps: 1
   max_grad_norm: 1.0
   batch_size: 256

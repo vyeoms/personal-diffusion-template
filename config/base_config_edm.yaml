@@ -37,7 +37,9 @@ guidance:
 training:
   random_seed: 50192834
   iters: 512
-  warmup_steps: 5000
+  warmup_steps: 50
+  # Serious runs: an EDM2 effective-LR schedule (overrides warmup_steps), e.g.
+  # lr_schedule: { ref_lr: 1e-2, ref_batches: 70e3, rampup_Mimg: 10 }
   gradient_accumulation_steps: 1
   max_grad_norm: 1.0
   batch_size: 256

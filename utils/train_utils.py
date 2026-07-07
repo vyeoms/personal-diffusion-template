@@ -21,8 +21,10 @@ class EMA:
         return self.ema_model
 
 #----------------------------------------------------------------------------
-# Learning rate decay schedule used in the paper "Analyzing and Improving
-# the Training Dynamics of Diffusion Models".
+# EDM2 effective-LR schedule ("Analyzing and Improving the Training Dynamics of
+# Diffusion Models"): linear rampup over the first `rampup_Mimg`, then
+# inverse-sqrt decay past `ref_batches`. Keyed on images seen (cur_nimg), so it
+# is scale-invariant — wire it in via training.lr_schedule for serious runs.
 
 def learning_rate_schedule(cur_nimg, batch_size, ref_lr=100e-4, ref_batches=70e3, rampup_Mimg=10):
     lr = ref_lr

@@ -135,13 +135,6 @@ def evaluate_log_likelihood(
     # We iterate 0 -> T-1
     timesteps = range(0, alphas.shape[0] - 1)
 
-    nll_over_steps = []
-    x0_std_steps = []
-    eps_std_steps = []
-    x0_mean_steps = []
-    eps_mean_steps = []
-    dt_steps = []
-
     # 2. Initialize x_bar (Equation 13/14 context)
     # At t=0, alpha=1.0 (approx), so sigma=0. 
     # Therefore x_bar_0 = x_data / 1.0 = x_data
@@ -151,9 +144,7 @@ def evaluate_log_likelihood(
         # Accumulator for Log Likelihood (in Bits Per Dimension)
         # We initialize to 0 and add the divergence terms + final prior term
         ll_accumulator_bpd = torch.zeros(batch_size, device=device)
-        sigma_over_steps = []
-        sigma_next_steps = []
-        
+
         for i in timesteps:
             # Get current and next sigma
             # We assume alphas[i] corresponds to step i
@@ -162,13 +153,10 @@ def evaluate_log_likelihood(
             
             sigma_t = torch.sqrt(1 - alpha_t) / torch.sqrt(alpha_t)
             sigma_next = torch.sqrt(1 - alpha_next) / torch.sqrt(alpha_next)
-            sigma_over_steps.append(sigma_t.cpu())
-            sigma_next_steps.append(sigma_next.cpu())
-            
+
             # d_sigma (Positive because we are encoding: sigma increases)
             dt = sigma_next - sigma_t
-            dt_steps.append(dt.cpu())
-            
+
             # Prepare Model Input
             # From Image Eq (14): input is x_bar / sqrt(sigma^2 + 1)
             # This mathematically simplifies to x_original (the pixel space)
@@ -211,18 +199,12 @@ def evaluate_log_likelihood(
             # CNF Formula: log p_0 = log p_T + Integral(div) d_sigma
             # We add the divergence term immediately, scaled by dimensions
             ll_accumulator_bpd += (div_est * dt) / (data_dim * np.log(2))
-            nll_over_steps.append(ll_accumulator_bpd.detach().cpu().mean())
-            
+
             # --- Euler Step ---
             # dx_bar = epsilon * d_sigma
             with torch.no_grad():
                 x_bar = x_bar + drift * dt
 
-            x0_std_steps.append(model_output.detach().cpu().std())
-            eps_std_steps.append(eps.detach().cpu().std())
-            x0_mean_steps.append(model_output.detach().cpu().mean())
-            eps_mean_steps.append(eps.detach().cpu().mean())
-            
             # Re-attach gradient for next step
             x_bar = x_bar.detach().requires_grad_(True)
             

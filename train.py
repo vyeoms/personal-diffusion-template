@@ -15,7 +15,7 @@ from dataset.custom_data import CustomImageDataset, ConditionalToyDataset
 from guidance import build_guidance
 from utils.debug_viz_utils import plot_bucketed_data
 from utils.misc_utils import noop
-from utils.train_utils import cycle, EMA, load, save
+from utils.train_utils import cycle, EMA, load, save, learning_rate_schedule
 
 # ---------------------------------------------------------------------------
 # Registries — add a single line to support a new component.
@@ -97,6 +97,20 @@ def _prep_batch(batch, conditional, num_classes, nf, device):
         return x.to(device) * nf, F.one_hot(y.to(device), num_classes).float()
     return batch.to(device) * nf, None
 
+def _set_lr(optimizer, step, cfg, grad_accum):
+    """Per-step LR: the EDM2 effective-LR schedule if training.lr_schedule is set
+    (rampup + inverse-sqrt decay, for serious runs), else linear warmup_steps."""
+    sched = cfg.training.get("lr_schedule", None)
+    if sched is not None:
+        lr = learning_rate_schedule(step * cfg.training.batch_size * grad_accum,
+                                    cfg.training.batch_size, **sched)
+    elif cfg.training.get("warmup_steps", 0) > 0:
+        lr = cfg.training.lr * min((step + 1) / cfg.training.warmup_steps, 1.0)
+    else:
+        return
+    for group in optimizer.param_groups:
+        group["lr"] = lr
+
 @hydra.main(version_base=None, config_path="./config", config_name="base_config_edm")
 def train(cfg: DictConfig):
 
@@ -176,21 +190,31 @@ def train(cfg: DictConfig):
     ############################### Setup block ###############################
 
     # Training loop
+    grad_accum = max(1, cfg.training.get("gradient_accumulation_steps", 1))
+    max_grad_norm = cfg.training.get("max_grad_norm", None)
     for step in range(step, cfg.training.iters):
-        train_batch, labels = _prep_batch(next(train_dl), conditional, num_classes, normalization_factor, device)
+        _set_lr(optimizer, step, cfg, grad_accum)
 
         optimizer.zero_grad()
-        if cfg.diffusion.type == "edm" and cfg.logging.wandb.track:
-            loss, sigma = loss_fn(model, train_batch, labels, visualize=True)
-            not_agg_list.append(loss)
-            sigmas_list.append(sigma)
-        else:
-            loss = loss_fn(model, train_batch, labels)
-        loss = loss.mean()
-        loss.backward()
-        optimizer.step()
+        losses = []
+        for _ in range(grad_accum):  # accumulate grads over micro-batches
+            train_batch, labels = _prep_batch(next(train_dl), conditional, num_classes, normalization_factor, device)
+            if cfg.diffusion.type == "edm" and cfg.logging.wandb.track:
+                loss_elem, sigma = loss_fn(model, train_batch, labels, visualize=True)
+                not_agg_list.append(loss_elem)
+                sigmas_list.append(sigma)
+            else:
+                loss_elem = loss_fn(model, train_batch, labels)
+            micro_loss = loss_elem.mean()
+            (micro_loss / grad_accum).backward()
+            losses.append(micro_loss.detach())
 
+        if max_grad_norm:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+        optimizer.step()
         ema.update()
+
+        loss = torch.stack(losses).mean()
 
         # Logging
         if step % cfg.logging.train_log_freq == 0:
