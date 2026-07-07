@@ -34,10 +34,11 @@ class MPResMLP(nn.Module):
       F.silu / nn.SiLU         →  mp_silu     (rescaled activation,        Eq. 81)
       x + h (residual)         →  mp_sum      (magnitude-preserving lerp,  Eq. 88)
 
-    Interface:
+    Optional class conditioning: label_dim > 0 embeds a one-hot label (zeros =
+    null token) and fuses it into the time pathway via mp_sum; label_dim = 0 is
+    unconditional.
+
         forward(x_t, t, labels=None) -> predicted_x0
-        x_t : (B, in_dim)   noisy input
-        t   : (B,)  float   timestep indices in [0, T-1]
     """
 
     def __init__(
@@ -46,21 +47,24 @@ class MPResMLP(nn.Module):
         hidden_dim:   int = 128,
         num_layers:   int = 3,
         time_emb_dim: int = 64,
+        label_dim:    int = 0,
     ):
         super().__init__()
 
-        # MPFourier produces unit-magnitude embeddings: output var ≈ 1 by construction
-        # (cos features scaled by sqrt(2); Eq. 75).  Pass t.float() directly.
+        self.label_dim = label_dim
         self.time_emb   = MPFourier(time_emb_dim)
         self.input_proj = MPLinear(in_dim, hidden_dim)
+        self.label_emb  = MPLinear(label_dim, time_emb_dim) if label_dim > 0 else None
         self.blocks     = nn.ModuleList(
             [MPResBlock(hidden_dim, time_emb_dim) for _ in range(num_layers)]
         )
         self.out = MPLinear(hidden_dim, in_dim)
 
     def forward(self, x: torch.Tensor, t: torch.Tensor, labels=None) -> torch.Tensor:
-        t_emb = self.time_emb(t)           # (B, time_emb_dim), magnitude ≈ 1
-        h = mp_silu(self.input_proj(x.float()))    # (B, hidden_dim),   magnitude ≈ 1
+        t_emb = self.time_emb(t)
+        if self.label_emb is not None and labels is not None:
+            t_emb = mp_sum(t_emb, self.label_emb(labels.float()))
+        h = mp_silu(self.input_proj(x.float()))
         for block in self.blocks:
             h = block(h, t_emb)
-        return self.out(h)                 # (B, in_dim)
+        return self.out(h)

@@ -14,7 +14,7 @@ import numpy as np
 import torch
 
 from utils.mp_utils import MPConv, MPFourier # Modules from Karras et al's codebase.
-from utils.misc_utils import append_dims # Utility function for appending dimensions to tensors.
+from utils.misc_utils import append_dims, drop_labels # append_dims + CFG label dropout.
 
 class Precond(torch.nn.Module):
     def __init__(self,
@@ -61,10 +61,11 @@ class Precond(torch.nn.Module):
         return D_x
 
 class EDM2Loss:
-    def __init__(self, P_mean=-0.4, P_std=1.0, sigma_data=0.5):
+    def __init__(self, P_mean=-0.4, P_std=1.0, sigma_data=0.5, label_dropout=0.1):
         self.P_mean = P_mean
         self.P_std = P_std
         self.sigma_data = sigma_data
+        self.label_dropout = label_dropout
 
     def __call__(self, net, target, labels=None, visualize=False):
         rnd_normal = torch.randn([target.shape[0]], device=target.device)
@@ -75,6 +76,7 @@ class EDM2Loss:
         sigma  = append_dims(sigma,  target.ndim)
         weight = append_dims(weight, target.ndim)
 
+        labels = drop_labels(labels, self.label_dropout)
         noise = torch.randn_like(target) * sigma
         denoised, logvar = net(target + noise, sigma, labels, return_logvar=True)
         logvar = append_dims(logvar.flatten(), target.ndim) # ensure logvar is broadcastable to target's shape

@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from utils.misc_utils import append_dims # Utility function for appending dimensions to tensors.
+from utils.misc_utils import append_dims, drop_labels # append_dims + CFG label dropout.
 
 class DDPM(torch.nn.Module):
 
@@ -95,12 +95,14 @@ class DDPM(torch.nn.Module):
 # comparably.  γ=5 is the recommended default.
 # ------------------------------------------------------------------
 class DDPMLoss:
-    def __init__(self, gamma: float = 5.0):
+    def __init__(self, gamma: float = 5.0, label_dropout: float = 0.1):
         self.gamma = gamma
+        self.label_dropout = label_dropout
 
     def __call__(self, diffusion_model, x_0: torch.Tensor, labels=None) -> torch.Tensor:
         t = torch.randint(0, diffusion_model.T, (x_0.shape[0],), device=x_0.device)
         x_t, _ = diffusion_model.q_sample(x_0, t)
+        labels = drop_labels(labels, self.label_dropout)
         x0_hat = diffusion_model(x_t, t.float(), labels)
 
         # SNR(t) = ᾱ_t / (1 − ᾱ_t)

@@ -1,0 +1,96 @@
+# Conditional EDM + Classifier-Free Guidance demo.
+#
+# The one config where guidance actually *does* something: a class-conditional
+# model trained on K Gaussian blobs (conditional_toy), with label dropout so a
+# single network learns both D(·|c) and D(·|∅), then sampled with CFG.
+#
+#   python train.py --config-name base_config_edm_cfg
+#
+# Try sweeping the guidance scale to watch the blobs tighten:
+#   python train.py --config-name base_config_edm_cfg guidance.kwargs.guidance_scale=1.0   # off
+#   python train.py --config-name base_config_edm_cfg guidance.kwargs.guidance_scale=4.0   # strong
+
+# Model Architecture — mp_res_mlp with class conditioning enabled (label_dim > 0).
+backbone:
+  architecture: "mp_res_mlp"
+  init_kwargs:
+    in_dim: 2
+    hidden_dim: 128
+    num_layers: 3
+    label_dim: 6            # = data.num_classes; enables the label embedding path
+
+# Diffusion Process
+diffusion:
+  type: "edm"
+  init_kwargs:
+    sigma_data: 0.5
+    label_dim: 6            # = data.num_classes; Precond feeds one-hot labels through
+    use_fp16: True
+  loss_kwargs:
+    P_mean: -2.3
+    P_std: 1.1
+    label_dropout: 0.1      # CFG: fraction of labels dropped to ∅ during training
+
+# Sampler — pure EDM solver; guidance is applied by wrapping the denoiser (below).
+sampler:
+  type: "edm"
+  sampler_kwargs:
+    num_steps: 100
+    rho: 7.0
+    sigma_min: 2e-2
+    sigma_max: 10.0
+
+# Guidance (④) — the composable, sampling-time concern.
+#   type: none | cfg | autoguidance | interval
+guidance:
+  type: "cfg"
+  kwargs:
+    guidance_scale: 3.0     # w=1 → plain conditional; w>1 → sharper, less diverse
+  # --- Alternatives (swap `type` above) --------------------------------------
+  # Limited-interval guidance (Kynkäänniemi 2024): apply CFG only for σ∈[lo,hi].
+  #   type: "interval"
+  #   kwargs: { t_lo: 0.05, t_hi: 2.0 }   # units = σ for the EDM sampler
+  #   base:  { type: "cfg", kwargs: { guidance_scale: 3.0 } }
+  # Autoguidance (Karras 2024): guide with an earlier checkpoint of this model.
+  #   type: "autoguidance"
+  #   kwargs: { guidance_scale: 2.0 }
+  #   ref_checkpoint: "./checkpoints/model-1000.pt"
+
+# Training
+training:
+  random_seed: 50192834
+  iters: 4000
+  warmup_steps: 5000
+  gradient_accumulation_steps: 1
+  max_grad_norm: 1.0
+  batch_size: 256
+  lr: 5e-2
+  optimizer: "adam"
+  ema_decay: 0.99
+  continue_from_checkpoint: False
+  checkpoint_path: "/change/to/your/checkpoint.pt"
+  optimizer_kwargs:
+    weight_decay: 0.0
+    betas: [0.9, 0.999]
+
+# Validation
+validation:
+  n_samples: 300
+
+# Data — K Gaussian blobs on a ring, label = blob index.
+data:
+  dataset: "conditional_toy"
+  num_classes: 6
+  num_workers: 4
+
+# Logging
+logging:
+  train_log_freq: 20
+  val_log_freq: 200
+  save_freq: 500
+  checkpoint_dir: "./checkpoints"
+  log_dir: "./logs"
+  edm_loss_viz_start: 50
+  wandb:
+    track: True
+    project: "diffusion_template_viz"

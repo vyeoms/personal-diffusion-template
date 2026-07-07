@@ -23,6 +23,11 @@ sampler:
   sampler_kwargs:
     num_steps: 100
 
+# Guidance (④) — sampling-time denoiser wrapper. Inert here (unconditional data);
+# see base_config_flow_cfg.yaml for a runnable classifier-free-guidance example.
+guidance:
+  type: "none"  # none | cfg | autoguidance | interval
+
 # Training
 training:
   random_seed: 50192834

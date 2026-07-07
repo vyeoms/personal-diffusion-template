@@ -1,5 +1,7 @@
 # Miscellaneous utilities for general use
 
+import torch
+
 # Appends dimensions to the end of a tensor until it has target_dims dimensions
 # Taken from k-diffusion: https://github.com/crowsonkb/k-diffusion/blob/master/k_diffusion/utils.py#L43C1-L48C48
 def append_dims(x, target_dims):
@@ -8,6 +10,14 @@ def append_dims(x, target_dims):
     if dims_to_append < 0:
         raise ValueError(f'input has {x.ndim} dims but target_dims is {target_dims}, which is less')
     return x[(...,) + (None,) * dims_to_append]
+
+# CFG label dropout: with prob p, replace a sample's one-hot label with the null
+# (all-zeros) vector, so one net learns both D(·|c) and D(·|∅). No-op if unconditional.
+def drop_labels(labels, p):
+    if labels is None or p <= 0:
+        return labels
+    keep = (torch.rand(labels.shape[0], device=labels.device) >= p).float()
+    return labels * append_dims(keep, labels.ndim)
 
 def noop(*args, **kwargs):
     pass

@@ -2,7 +2,7 @@
 
 import torch
 
-from utils.misc_utils import append_dims # Utility function for appending dimensions to tensors.
+from utils.misc_utils import append_dims, drop_labels # append_dims + CFG label dropout.
 
 class Flow(torch.nn.Module):
     def __init__(self,
@@ -23,9 +23,10 @@ class Flow(torch.nn.Module):
         return self.backbone(x, c_noise, labels, **backbone_kwargs)
 
 class LogitFMLoss:
-    def __init__(self, P_mean=0.0, P_std=1.0):
+    def __init__(self, P_mean=0.0, P_std=1.0, label_dropout=0.1):
         self.P_mean = P_mean
         self.P_std = P_std
+        self.label_dropout = label_dropout
 
     def __call__(self, net, target, labels=None, visualize=False, min_weight=0.05):
         rnd_normal = torch.randn([target.shape[0]], device=target.device)
@@ -34,6 +35,7 @@ class LogitFMLoss:
         # Reshape sigma and weight to be broadcastable to target's shape
         t = append_dims(t, target.ndim)
 
+        labels = drop_labels(labels, self.label_dropout)
         noise = torch.randn_like(target)
         z_t = t*target + (1-t)*noise
         vel_target = target - noise
@@ -44,12 +46,16 @@ class LogitFMLoss:
         return loss
 
 class VanillaFMLoss:
+    def __init__(self, label_dropout=0.1):
+        self.label_dropout = label_dropout
+
     def __call__(self, net, target, labels=None, visualize=False, min_weight=0.05):
         t = torch.rand([target.shape[0]], device=target.device)
 
         # Reshape sigma and weight to be broadcastable to target's shape
         t = append_dims(t, target.ndim)
 
+        labels = drop_labels(labels, self.label_dropout)
         noise = torch.randn_like(target)
         z_t = t*target + (1-t)*noise
         vel_target = target - noise

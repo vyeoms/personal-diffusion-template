@@ -1,26 +1,19 @@
 #----------------------------------------------------------------------------
-# EDM sampler from the paper
-# "Elucidating the Design Space of Diffusion-Based Generative Models",
-# extended to support classifier-free guidance.
-
-# Implementation by Karras et al., taken from https://github.com/NVlabs/edm2/blob/main/generate_images.py
+# EDM sampler ("Elucidating the Design Space of Diffusion-Based Generative
+# Models"), from https://github.com/NVlabs/edm2. Pure solver — for guidance,
+# pass a guided denoiser from guidance/ as `net`.
 
 import numpy as np
 import torch
 
 def edm_sampler(
-    net, noise, labels=None, gnet=None,
-    num_steps=32, sigma_min=0.002, sigma_max=80, rho=7, guidance=1,
+    net, noise, labels=None,
+    num_steps=32, sigma_min=0.002, sigma_max=80, rho=7,
     S_churn=0, S_min=0, S_max=float('inf'), S_noise=1,
     dtype=torch.float32, randn_like=torch.randn_like,
 ):
-    # Guided denoiser.
     def denoise(x, t):
-        Dx = net(x, t, labels).to(dtype)
-        if guidance == 1:
-            return Dx
-        ref_Dx = gnet(x, t, labels).to(dtype)
-        return ref_Dx.lerp(Dx, guidance)
+        return net(x, t, labels).to(dtype)
 
     # Time step discretization.
     step_indices = torch.arange(num_steps, dtype=dtype, device=noise.device)

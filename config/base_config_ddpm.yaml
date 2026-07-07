@@ -24,6 +24,11 @@ sampler:
   type: "ddpm"
   sampler_kwargs: {}
 
+# Guidance (④) — sampling-time denoiser wrapper. Inert here (unconditional data);
+# see base_config_edm_cfg.yaml for a runnable classifier-free-guidance example.
+guidance:
+  type: "none"  # none | cfg | autoguidance | interval
+
 # Training
 training:
   random_seed: 50192834

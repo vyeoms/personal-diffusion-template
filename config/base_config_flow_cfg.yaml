@@ -1,0 +1,78 @@
+# Conditional flow matching + classifier-free guidance demo.
+#
+# Same conditional toy + guidance wiring as base_config_edm_cfg, different
+# formulation — architecture ⟂ training dynamics. Uses mp_mlp (the flow-native
+# backbone, with input preconditioning) rather than the EDM demo's mp_res_mlp;
+# the CFGDenoiser wraps the flow model unchanged either way.
+#
+#   python train.py --config-name base_config_flow_cfg
+#   python train.py --config-name base_config_flow_cfg guidance.kwargs.guidance_scale=1.0  # off
+
+backbone:
+  architecture: "mp_mlp"
+  init_kwargs:
+    in_dim: 2
+    hidden_dim: 128
+    num_layers: 4
+    label_dim: 6
+
+diffusion:
+  type: "flow"
+  init_kwargs:
+    label_dim: 6
+  loss_kwargs:
+    P_mean: 0.7
+    P_std: 0.6
+    label_dropout: 0.1
+
+sampler:
+  type: "flow"
+  sampler_kwargs:
+    num_steps: 100
+    t_min: 1e-3
+    t_max: 0.999
+
+guidance:
+  type: "cfg"
+  # Deterministic flow collapses within-class diversity far faster than EDM under
+  # CFG, so the useful scale is gentler (w≈1.5 already pins each class to its mode).
+  kwargs:
+    guidance_scale: 1.5
+  # interval units are t∈[0,1] for the flow sampler:
+  #   type: "interval"
+  #   kwargs: { t_lo: 0.1, t_hi: 0.9 }
+  #   base:  { type: "cfg", kwargs: { guidance_scale: 3.0 } }
+
+training:
+  random_seed: 50192834
+  iters: 4000
+  warmup_steps: 5000
+  gradient_accumulation_steps: 1
+  max_grad_norm: 1.0
+  batch_size: 256
+  lr: 5e-3
+  optimizer: "adam"
+  ema_decay: 0.99
+  continue_from_checkpoint: False
+  checkpoint_path: "/change/to/your/checkpoint.pt"
+  optimizer_kwargs:
+    weight_decay: 0.0
+    betas: [0.9, 0.999]
+
+validation:
+  n_samples: 300
+
+data:
+  dataset: "conditional_toy"
+  num_classes: 6
+  num_workers: 4
+
+logging:
+  train_log_freq: 20
+  val_log_freq: 200
+  save_freq: 500
+  checkpoint_dir: "./checkpoints"
+  log_dir: "./logs"
+  wandb:
+    track: True
+    project: "diffusion_template_viz"
